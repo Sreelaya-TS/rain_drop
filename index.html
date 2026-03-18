@@ -1,0 +1,922 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rain Drop - Journey to the Ocean</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    background: #0a0a2e;
+    overflow: hidden;
+    font-family: Arial, sans-serif;
+  }
+  canvas {
+    display: block;
+    border-radius: 4px;
+    box-shadow: 0 0 40px rgba(0,100,200,0.3);
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// ===================== SETUP =====================
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+const WIDTH = 800;
+const HEIGHT = 600;
+canvas.width = WIDTH;
+canvas.height = HEIGHT;
+
+// Scale canvas to fit window
+function resizeCanvas() {
+  const scaleX = window.innerWidth / WIDTH;
+  const scaleY = window.innerHeight / HEIGHT;
+  const scale = Math.min(scaleX, scaleY, 1.5);
+  canvas.style.width = (WIDTH * scale) + "px";
+  canvas.style.height = (HEIGHT * scale) + "px";
+}
+resizeCanvas();
+window.addEventListener("resize", resizeCanvas);
+
+// ===================== COLORS =====================
+const WHITE = "#ffffff";
+const OCEAN_BLUE = "#006994";
+const DARK_BLUE = "#003c64";
+const LIGHT_BLUE = "#87ceeb";
+const GOLD = "#ffd700";
+const GREEN = "#32ff64";
+const RED = "#ff5050";
+const SKY_TOP = [135, 206, 250];
+const SKY_BOTTOM = [25, 25, 112];
+
+// ===================== PRE-RENDERED ASSETS =====================
+
+// Pre-render gradient background (fixes the lag!)
+const bgCanvas = document.createElement("canvas");
+bgCanvas.width = WIDTH;
+bgCanvas.height = HEIGHT;
+const bgCtx = bgCanvas.getContext("2d");
+const bgGrad = bgCtx.createLinearGradient(0, 0, 0, HEIGHT);
+bgGrad.addColorStop(0, `rgb(${SKY_TOP.join(",")})`);
+bgGrad.addColorStop(1, `rgb(${SKY_BOTTOM.join(",")})`);
+bgCtx.fillStyle = bgGrad;
+bgCtx.fillRect(0, 0, WIDTH, HEIGHT);
+
+// Pre-render raindrop
+function createDropCanvas(w, h, color1, color2) {
+  const c = document.createElement("canvas");
+  c.width = w + 4;
+  c.height = h + 4;
+  const cx = c.getContext("2d");
+  const ox = w / 2 + 2;
+  const oy = 2;
+
+  cx.beginPath();
+  cx.moveTo(ox, oy);
+  cx.bezierCurveTo(ox + w * 0.05, oy + h * 0.3, ox + w * 0.5, oy + h * 0.55, ox, oy + h);
+  cx.bezierCurveTo(ox - w * 0.5, oy + h * 0.55, ox - w * 0.05, oy + h * 0.3, ox, oy);
+  cx.closePath();
+
+  const grad = cx.createRadialGradient(ox - w * 0.15, oy + h * 0.35, 2, ox, oy + h * 0.5, h * 0.5);
+  grad.addColorStop(0, color1);
+  grad.addColorStop(1, color2);
+  cx.fillStyle = grad;
+  cx.fill();
+
+  // Shine
+  cx.beginPath();
+  cx.ellipse(ox - w * 0.12, oy + h * 0.32, w * 0.08, h * 0.1, -0.3, 0, Math.PI * 2);
+  cx.fillStyle = "rgba(255,255,255,0.6)";
+  cx.fill();
+
+  return c;
+}
+
+const playerDrop = createDropCanvas(44, 62, "#a8d8ff", "#2266cc");
+const powerGreen = createDropCanvas(24, 36, "#80ffaa", "#22aa44");
+const powerBlue = createDropCanvas(24, 36, "#88ccff", "#2244dd");
+const powerGold = createDropCanvas(24, 36, "#ffee88", "#cc8800");
+
+// Pre-render cloud
+function createCloudCanvas(w, h, brightness) {
+  const c = document.createElement("canvas");
+  c.width = w + 10;
+  c.height = h + 10;
+  const cx = c.getContext("2d");
+  const b = brightness || 240;
+
+  const blobs = [
+    { x: w * 0.28, y: h * 0.55, rx: w * 0.28, ry: h * 0.35 },
+    { x: w * 0.5, y: h * 0.35, rx: w * 0.25, ry: h * 0.35 },
+    { x: w * 0.72, y: h * 0.55, rx: w * 0.28, ry: h * 0.32 },
+    { x: w * 0.4, y: h * 0.6, rx: w * 0.2, ry: h * 0.25 },
+    { x: w * 0.6, y: h * 0.6, rx: w * 0.2, ry: h * 0.25 },
+  ];
+
+  cx.save();
+  cx.translate(5, 5);
+  // Shadow
+  cx.shadowColor = "rgba(0,0,0,0.15)";
+  cx.shadowBlur = 8;
+  cx.shadowOffsetY = 4;
+
+  for (const bl of blobs) {
+    cx.beginPath();
+    cx.ellipse(bl.x, bl.y, bl.rx, bl.ry, 0, 0, Math.PI * 2);
+    const g = cx.createRadialGradient(bl.x, bl.y - bl.ry * 0.3, 0, bl.x, bl.y, bl.ry);
+    g.addColorStop(0, `rgb(${b},${b},${b})`);
+    g.addColorStop(1, `rgb(${b - 30},${b - 30},${b - 20})`);
+    cx.fillStyle = g;
+    cx.fill();
+  }
+  cx.restore();
+
+  return c;
+}
+
+const cloudNormal = createCloudCanvas(160, 90, 240);
+const cloudFast = createCloudCanvas(130, 72, 190);
+const cloudBig = createCloudCanvas(220, 120, 235);
+
+// ===================== INPUT =====================
+const keys = {};
+window.addEventListener("keydown", e => {
+  keys[e.code] = true;
+  e.preventDefault();
+});
+window.addEventListener("keyup", e => {
+  keys[e.code] = false;
+  e.preventDefault();
+});
+
+// Touch / mouse controls for mobile
+let touchX = null;
+let touchActive = false;
+canvas.addEventListener("touchstart", e => {
+  e.preventDefault();
+  touchActive = true;
+  touchX = e.touches[0].clientX;
+});
+canvas.addEventListener("touchmove", e => {
+  e.preventDefault();
+  if (touchActive) touchX = e.touches[0].clientX;
+});
+canvas.addEventListener("touchend", e => {
+  e.preventDefault();
+  touchActive = false;
+  touchX = null;
+});
+canvas.addEventListener("click", () => {
+  keys["Enter"] = true;
+  setTimeout(() => keys["Enter"] = false, 100);
+});
+
+// ===================== HIGH SCORE =====================
+function getHighScore() {
+  return parseInt(localStorage.getItem("raindrop_high") || "0");
+}
+function setHighScore(s) {
+  localStorage.setItem("raindrop_high", s.toString());
+}
+
+// ===================== GAME CONSTANTS =====================
+const WIN_SCORE = 30;
+const LANES = [100, 220, 340, 460, 580, 700];
+
+// ===================== GAME STATE =====================
+let state = "WELCOME"; // WELCOME, PLAYING, GAME_OVER, VICTORY
+let frame = 0;
+let lastTime = 0;
+let dt = 0;
+
+// ===================== RAIN PARTICLES =====================
+class RainParticle {
+  constructor() {
+    this.reset();
+    this.y = Math.random() * HEIGHT;
+  }
+  reset() {
+    this.x = Math.random() * WIDTH;
+    this.y = -Math.random() * 50 - 10;
+    this.speed = 4 + Math.random() * 5;
+    this.len = 8 + Math.random() * 14;
+    this.alpha = 0.15 + Math.random() * 0.25;
+  }
+  update(d) {
+    this.y += this.speed * d;
+    if (this.y > HEIGHT) this.reset();
+  }
+  draw() {
+    ctx.strokeStyle = `rgba(200,220,255,${this.alpha})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(this.x - 1, this.y + this.len);
+    ctx.stroke();
+  }
+}
+
+// ===================== SPARKLE =====================
+class Sparkle {
+  constructor(x, y, color) {
+    this.x = x;
+    this.y = y;
+    this.color = color;
+    this.life = 1;
+    this.vx = (Math.random() - 0.5) * 6;
+    this.vy = -1 - Math.random() * 4;
+    this.size = 2 + Math.random() * 3;
+  }
+  update(d) {
+    this.x += this.vx * d;
+    this.y += this.vy * d;
+    this.vy += 5 * d;
+    this.life -= 1.8 * d;
+    return this.life > 0;
+  }
+  draw() {
+    ctx.globalAlpha = Math.max(0, this.life);
+    ctx.fillStyle = this.color;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.size * this.life, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ===================== PLAYER =====================
+class Player {
+  constructor() {
+    this.w = 48;
+    this.h = 66;
+    this.x = WIDTH / 2 - this.w / 2;
+    this.y = 90;
+    this.velY = 0.8;
+    this.speed = 320; // pixels per second
+    this.shield = false;
+    this.shieldTimer = 0;
+    this.invincible = false;
+    this.invTimer = 0;
+    this.wobbleT = Math.random() * 10;
+  }
+  update(d) {
+    this.wobbleT += d * 2.5;
+    // Gentle float
+    this.y += this.velY * 60 * d;
+    this.x += Math.sin(this.wobbleT) * 0.4;
+
+    const spd = this.speed * d;
+    if (keys["ArrowLeft"] || keys["KeyA"]) this.x -= spd;
+    if (keys["ArrowRight"] || keys["KeyD"]) this.x += spd;
+    if (keys["ArrowUp"] || keys["KeyW"]) this.y -= spd * 0.5;
+    if (keys["ArrowDown"] || keys["KeyS"]) this.y += spd * 0.35;
+
+    // Touch controls
+    if (touchActive && touchX !== null) {
+      const rect = canvas.getBoundingClientRect();
+      const relX = (touchX - rect.left) / rect.width * WIDTH;
+      const diff = relX - (this.x + this.w / 2);
+      this.x += Math.sign(diff) * Math.min(Math.abs(diff), spd);
+    }
+
+    // Bounds
+    this.x = Math.max(5, Math.min(this.x, WIDTH - this.w - 5));
+    this.y = Math.max(30, Math.min(this.y, HEIGHT - this.h - 65));
+
+    if (this.shield) {
+      this.shieldTimer -= d;
+      if (this.shieldTimer <= 0) this.shield = false;
+    }
+    if (this.invincible) {
+      this.invTimer -= d;
+      if (this.invTimer <= 0) this.invincible = false;
+    }
+  }
+  getCenterX() { return this.x + this.w / 2; }
+  getCenterY() { return this.y + this.h / 2; }
+  draw() {
+    // Shield glow
+    if (this.shield) {
+      const pulse = Math.sin(frame * 0.08) * 0.3 + 0.7;
+      const r = (this.w * 0.7 + 18) * pulse;
+      const grad = ctx.createRadialGradient(
+        this.getCenterX(), this.getCenterY(), r * 0.3,
+        this.getCenterX(), this.getCenterY(), r
+      );
+      grad.addColorStop(0, "rgba(100,200,255,0.25)");
+      grad.addColorStop(1, "rgba(100,200,255,0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(this.getCenterX(), this.getCenterY(), r, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(150,220,255,0.5)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(this.getCenterX(), this.getCenterY(), r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // Invincibility flash
+    if (this.invincible && Math.floor(frame * 0.5) % 2 === 0) {
+      ctx.globalAlpha = 0.4;
+    }
+
+    ctx.drawImage(playerDrop, this.x - 2, this.y - 2);
+    ctx.globalAlpha = 1;
+  }
+  hitbox() {
+    // Smaller hitbox for fairness
+    return {
+      x: this.x + 8,
+      y: this.y + 8,
+      w: this.w - 16,
+      h: this.h - 12
+    };
+  }
+}
+
+// ===================== CLOUD =====================
+class Cloud {
+  constructor(speed, type) {
+    this.type = type || "normal";
+    if (this.type === "fast") {
+      this.img = cloudFast;
+      this.w = 135;
+      this.h = 77;
+      this.spd = speed * 1.5;
+    } else if (this.type === "big") {
+      this.img = cloudBig;
+      this.w = 230;
+      this.h = 130;
+      this.spd = speed * 0.85;
+    } else {
+      this.img = cloudNormal;
+      this.w = 170;
+      this.h = 100;
+      this.spd = speed;
+    }
+    this.x = LANES[Math.floor(Math.random() * LANES.length)] - this.w / 2;
+    this.y = HEIGHT + 100;
+    this.passed = false;
+    this.hSpd = (Math.random() - 0.5) * 40;
+  }
+  update(d) {
+    this.y -= this.spd * 60 * d;
+    this.x += this.hSpd * d;
+    if (this.x < -10 || this.x + this.w > WIDTH + 10) this.hSpd *= -1;
+    return this.y + this.h > -60;
+  }
+  draw() {
+    ctx.drawImage(this.img, this.x, this.y);
+  }
+  hitbox() {
+    // Inset hitbox so it feels fair
+    return {
+      x: this.x + 15,
+      y: this.y + 15,
+      w: this.w - 30,
+      h: this.h - 25
+    };
+  }
+}
+
+// ===================== POWER-UP =====================
+class PowerUp {
+  constructor(type) {
+    this.type = type || "slow";
+    if (this.type === "shield") {
+      this.img = powerBlue;
+      this.tint = "#66ccff";
+    } else if (this.type === "score") {
+      this.img = powerGold;
+      this.tint = GOLD;
+    } else {
+      this.img = powerGreen;
+      this.tint = GREEN;
+    }
+    this.w = 28;
+    this.h = 40;
+    this.x = 50 + Math.random() * (WIDTH - 100);
+    this.y = HEIGHT + 40;
+    this.spd = 2.5;
+    this.wobbleT = Math.random() * 10;
+    this.glowT = Math.random() * 10;
+  }
+  update(d) {
+    this.y -= this.spd * 60 * d;
+    this.wobbleT += d * 3;
+    this.x += Math.sin(this.wobbleT) * 1.2;
+    this.glowT += d * 4;
+    return this.y + this.h > -30;
+  }
+  draw() {
+    // Glow
+    const gs = 22 + Math.sin(this.glowT) * 5;
+    const cx = this.x + this.w / 2;
+    const cy = this.y + this.h / 2;
+    const grad = ctx.createRadialGradient(cx, cy, 2, cx, cy, gs);
+    grad.addColorStop(0, this.tint + "44");
+    grad.addColorStop(1, this.tint + "00");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, gs, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.drawImage(this.img, this.x, this.y);
+  }
+  hitbox() {
+    return { x: this.x, y: this.y, w: this.w, h: this.h };
+  }
+}
+
+// ===================== COLLISION =====================
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x &&
+         a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// ===================== DRAW HELPERS =====================
+function drawOcean(t) {
+  // Ocean base
+  ctx.fillStyle = DARK_BLUE;
+  ctx.fillRect(0, HEIGHT - 55, WIDTH, 55);
+
+  // Waves
+  for (let layer = 0; layer < 2; layer++) {
+    ctx.beginPath();
+    ctx.moveTo(0, HEIGHT);
+    for (let x = 0; x <= WIDTH; x += 4) {
+      const waveY = HEIGHT - 50 + layer * 18 +
+        Math.sin(t * 0.04 + x * 0.015 + layer * 2) * 8 +
+        Math.sin(t * 0.025 + x * 0.008) * 4;
+      ctx.lineTo(x, waveY);
+    }
+    ctx.lineTo(WIDTH, HEIGHT);
+    ctx.closePath();
+    const colors = [OCEAN_BLUE, "#008cb4"];
+    ctx.fillStyle = colors[layer];
+    ctx.fill();
+  }
+}
+
+function drawText(text, x, y, size, color, align) {
+  ctx.font = `bold ${size}px Arial, sans-serif`;
+  ctx.textAlign = align || "left";
+  ctx.textBaseline = "middle";
+  // Shadow
+  ctx.fillStyle = "rgba(0,0,0,0.5)";
+  ctx.fillText(text, x + 2, y + 2);
+  // Text
+  ctx.fillStyle = color || WHITE;
+  ctx.fillText(text, x, y);
+}
+
+function drawProgressBar(score, target) {
+  const bw = 180, bh = 22;
+  const bx = WIDTH - bw - 20, by = 22;
+  const progress = Math.min(score / target, 1);
+
+  // Bg
+  ctx.fillStyle = "rgba(0,0,30,0.6)";
+  roundRect(bx - 2, by - 2, bw + 4, bh + 4, 12);
+  ctx.fill();
+
+  ctx.fillStyle = DARK_BLUE;
+  roundRect(bx, by, bw, bh, 10);
+  ctx.fill();
+
+  // Fill
+  if (progress > 0) {
+    const fw = Math.max(4, bw * progress);
+    const fillGrad = ctx.createLinearGradient(bx, 0, bx + bw, 0);
+    fillGrad.addColorStop(0, "#64c864");
+    fillGrad.addColorStop(1, "#32ff96");
+    ctx.fillStyle = fillGrad;
+    roundRect(bx, by, fw, bh, 10);
+    ctx.fill();
+  }
+
+  // Border
+  ctx.strokeStyle = "rgba(255,255,255,0.7)";
+  ctx.lineWidth = 2;
+  roundRect(bx, by, bw, bh, 10);
+  ctx.stroke();
+
+  // Label
+  drawText("Ocean", bx + bw / 2, by + bh / 2, 14, WHITE, "center");
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function hslColor(h, s, l) {
+  return `hsl(${h % 360}, ${s}%, ${l}%)`;
+}
+
+// ===================== GAME DATA =====================
+let player, clouds, powerups, sparkles, rainParticles;
+let spawnTimer, powerTimer, cloudSpeed, score, lives, highScore;
+
+function initGame() {
+  player = new Player();
+  clouds = [];
+  powerups = [];
+  sparkles = [];
+  rainParticles = [];
+  for (let i = 0; i < 35; i++) rainParticles.push(new RainParticle());
+  spawnTimer = 0;
+  powerTimer = 0;
+  cloudSpeed = 3.2;
+  score = 0;
+  lives = 3;
+  highScore = getHighScore();
+}
+
+// ===================== CONFETTI (victory) =====================
+let confetti = [];
+function initConfetti() {
+  confetti = [];
+  const colors = [GOLD, GREEN, WHITE, LIGHT_BLUE, "#ff9696", "#ffc864"];
+  for (let i = 0; i < 120; i++) {
+    confetti.push({
+      x: Math.random() * WIDTH,
+      y: -Math.random() * HEIGHT * 1.5,
+      speed: 1.5 + Math.random() * 4,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      size: 3 + Math.random() * 7,
+      rot: Math.random() * 360,
+      rotSpd: (Math.random() - 0.5) * 8,
+      wobble: Math.random() * 10
+    });
+  }
+}
+
+// ===================== SCREEN: WELCOME =====================
+function updateWelcome(d) {
+  for (const p of rainParticles) p.update(d);
+
+  if (keys["Enter"] || keys["Space"]) {
+    keys["Enter"] = false;
+    keys["Space"] = false;
+    initGame();
+    state = "PLAYING";
+  }
+}
+
+function drawWelcome() {
+  ctx.drawImage(bgCanvas, 0, 0);
+  for (const p of rainParticles) p.draw();
+  drawOcean(frame);
+
+  const titleY = 135 + Math.sin(frame * 0.03) * 12;
+
+  // Title glow
+  ctx.shadowColor = "rgba(100,150,255,0.6)";
+  ctx.shadowBlur = 20;
+  drawText("RAIN DROP", WIDTH / 2, titleY, 64, WHITE, "center");
+  ctx.shadowBlur = 0;
+
+  drawText("Journey to the Ocean", WIDTH / 2, titleY + 50, 28, LIGHT_BLUE, "center");
+
+  const ys = 270;
+  drawText("Controls:", WIDTH / 2, ys, 26, GOLD, "center");
+  drawText("Arrow Keys / WASD to move", WIDTH / 2, ys + 35, 20, WHITE, "center");
+  drawText("Tap sides on mobile", WIDTH / 2, ys + 60, 20, WHITE, "center");
+
+  drawText("Avoid the clouds!", WIDTH / 2, ys + 100, 22, "#ffcccc", "center");
+  drawText("Collect power-ups!", WIDTH / 2, ys + 130, 22, GOLD, "center");
+  drawText(`Reach score ${WIN_SCORE} to win!`, WIDTH / 2, ys + 160, 22, GREEN, "center");
+
+  const pulse = 0.85 + Math.sin(frame * 0.08) * 0.15;
+  const sz = Math.floor(36 * pulse);
+  drawText("Press ENTER or Tap to Start", WIDTH / 2, 530, sz, WHITE, "center");
+
+  // Draw a demo raindrop
+  ctx.drawImage(playerDrop, WIDTH / 2 - 24, titleY - 80);
+}
+
+// ===================== SCREEN: PLAYING =====================
+function updatePlaying(d) {
+  for (const p of rainParticles) p.update(d);
+  player.update(d);
+
+  // Spawn clouds
+  spawnTimer += d;
+  const spawnRate = Math.max(0.5, 1.2 - score * 0.03);
+  if (spawnTimer > spawnRate) {
+    const roll = Math.random();
+    let type = "normal";
+    if (roll > 0.9) type = "big";
+    else if (roll > 0.7) type = "fast";
+    clouds.push(new Cloud(cloudSpeed, type));
+    spawnTimer = 0;
+  }
+
+  // Spawn powerups
+  powerTimer += d;
+  if (powerTimer > 4) {
+    const roll = Math.random();
+    let type = "slow";
+    if (roll > 0.7) type = "shield";
+    else if (roll > 0.4) type = "score";
+    powerups.push(new PowerUp(type));
+    powerTimer = 0;
+  }
+
+  // Difficulty
+  cloudSpeed = Math.min(6.5, 3.2 + score * 0.07);
+
+  // Update clouds
+  clouds = clouds.filter(c => c.update(d));
+  powerups = powerups.filter(p => p.update(d));
+  sparkles = sparkles.filter(s => s.update(d));
+
+  // Scoring
+  const ph = player.hitbox();
+  for (const c of clouds) {
+    if (!c.passed && c.y + c.h < player.y) {
+      score += 1;
+      c.passed = true;
+    }
+  }
+
+  // Win check
+  if (score >= WIN_SCORE) {
+    if (score > highScore) { highScore = score; setHighScore(score); }
+    initConfetti();
+    state = "VICTORY";
+    return;
+  }
+
+  // Cloud collision
+  if (!player.shield && !player.invincible) {
+    for (const c of clouds) {
+      if (rectsOverlap(ph, c.hitbox())) {
+        lives--;
+        player.invincible = true;
+        player.invTimer = 1.5;
+        for (let i = 0; i < 12; i++)
+          sparkles.push(new Sparkle(player.getCenterX(), player.getCenterY(), RED));
+        if (lives <= 0) {
+          if (score > highScore) { highScore = score; setHighScore(score); }
+          state = "GAME_OVER";
+          return;
+        }
+        break;
+      }
+    }
+  }
+
+  // Shield absorbs hit
+  if (player.shield) {
+    for (let i = clouds.length - 1; i >= 0; i--) {
+      if (rectsOverlap(ph, clouds[i].hitbox())) {
+        for (let j = 0; j < 8; j++)
+          sparkles.push(new Sparkle(player.getCenterX(), player.getCenterY(), "#66ccff"));
+        clouds.splice(i, 1);
+        player.shield = false;
+        break;
+      }
+    }
+  }
+
+  // Powerup collection
+  for (let i = powerups.length - 1; i >= 0; i--) {
+    if (rectsOverlap(ph, powerups[i].hitbox())) {
+      const pu = powerups[i];
+      for (let j = 0; j < 8; j++)
+        sparkles.push(new Sparkle(pu.x + pu.w / 2, pu.y + pu.h / 2, pu.tint));
+      if (pu.type === "slow") cloudSpeed = Math.max(2, cloudSpeed - 0.8);
+      else if (pu.type === "shield") { player.shield = true; player.shieldTimer = 3; }
+      else if (pu.type === "score") score += 3;
+      powerups.splice(i, 1);
+    }
+  }
+
+  if (score > highScore) { highScore = score; setHighScore(score); }
+}
+
+function drawPlaying() {
+  ctx.drawImage(bgCanvas, 0, 0);
+  for (const p of rainParticles) p.draw();
+  drawOcean(frame);
+
+  for (const c of clouds) c.draw();
+  for (const p of powerups) p.draw();
+  player.draw();
+  for (const s of sparkles) s.draw();
+
+  // HUD
+  drawText(`Score: ${score}`, 20, 25, 30, WHITE);
+  drawText(`Best: ${highScore}`, 20, 58, 22, GOLD);
+
+  const livesColor = lives === 1 ? RED : WHITE;
+  let livesText = "";
+  for (let i = 0; i < lives; i++) livesText += "\u2764 ";
+  drawText(livesText.trim(), 20, 90, 22, livesColor);
+
+  if (player.shield) {
+    const rem = Math.ceil(player.shieldTimer);
+    drawText(`Shield: ${rem}s`, WIDTH / 2, 18, 22, "#66ccff", "center");
+  }
+
+  drawProgressBar(score, WIN_SCORE);
+}
+
+// ===================== SCREEN: GAME OVER =====================
+function updateGameOver(d) {
+  for (const p of rainParticles) p.update(d);
+  if (keys["Enter"] || keys["Space"]) {
+    keys["Enter"] = false;
+    keys["Space"] = false;
+    state = "WELCOME";
+  }
+}
+
+function drawGameOver() {
+  ctx.drawImage(bgCanvas, 0, 0);
+  for (const p of rainParticles) p.draw();
+  drawOcean(frame);
+
+  const dy = 130 + Math.sin(frame * 0.04) * 8;
+
+  ctx.shadowColor = "rgba(255,50,50,0.4)";
+  ctx.shadowBlur = 15;
+  drawText("GAME OVER", WIDTH / 2, dy, 58, RED, "center");
+  ctx.shadowBlur = 0;
+
+  drawText("The clouds caught you!", WIDTH / 2, dy + 55, 26, WHITE, "center");
+  drawText(`Final Score: ${score}`, WIDTH / 2, 290, 44, GOLD, "center");
+
+  const hs = getHighScore();
+  if (score >= hs && score > 0) {
+    const hue = (frame * 3) % 360;
+    drawText("NEW HIGH SCORE!", WIDTH / 2, 355, 36, hslColor(hue, 100, 65), "center");
+  } else {
+    drawText(`High Score: ${hs}`, WIDTH / 2, 355, 30, WHITE, "center");
+  }
+
+  drawText("Don't give up! Try again!", WIDTH / 2, 420, 24, LIGHT_BLUE, "center");
+
+  const pulse = 0.85 + Math.sin(frame * 0.08) * 0.15;
+  drawText("Press ENTER or Tap to Retry", WIDTH / 2, 520, Math.floor(32 * pulse), WHITE, "center");
+}
+
+// ===================== SCREEN: VICTORY =====================
+function updateVictory(d) {
+  for (const p of rainParticles) p.update(d);
+
+  // Update confetti
+  for (const c of confetti) {
+    c.y += c.speed * 60 * d;
+    c.x += Math.sin(frame * 0.02 + c.wobble) * 1.5;
+    c.rot += c.rotSpd * d * 60;
+    if (c.y > HEIGHT + 30) {
+      c.y = -20 - Math.random() * 40;
+      c.x = Math.random() * WIDTH;
+    }
+  }
+
+  if (keys["Enter"] || keys["Space"]) {
+    keys["Enter"] = false;
+    keys["Space"] = false;
+    state = "WELCOME";
+  }
+}
+
+function drawVictory() {
+  // Celebration gradient
+  const victoryBg = ctx.createLinearGradient(0, 0, 0, HEIGHT);
+  victoryBg.addColorStop(0, "#1a3a5c");
+  victoryBg.addColorStop(0.4, "#0d5e4a");
+  victoryBg.addColorStop(1, "#0a1628");
+  ctx.fillStyle = victoryBg;
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+  for (const p of rainParticles) p.draw();
+
+  // Animated ocean celebration
+  for (let layer = 0; layer < 3; layer++) {
+    ctx.beginPath();
+    ctx.moveTo(0, HEIGHT);
+    for (let x = 0; x <= WIDTH; x += 4) {
+      const wy = HEIGHT - 75 + layer * 22 +
+        Math.sin(frame * 0.06 + x * 0.012 + layer * 1.5) * 14;
+      ctx.lineTo(x, wy);
+    }
+    ctx.lineTo(WIDTH, HEIGHT);
+    ctx.closePath();
+    const blues = ["#006994", "#008cb4", "#00a0c8"];
+    ctx.fillStyle = blues[layer];
+    ctx.fill();
+  }
+
+  // Confetti
+  for (const c of confetti) {
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.rotate(c.rot * Math.PI / 180);
+    ctx.fillStyle = c.color;
+    ctx.fillRect(-c.size / 2, -c.size / 2, c.size, c.size * 0.6);
+    ctx.restore();
+  }
+
+  const ty = 95 + Math.sin(frame * 0.04) * 12;
+
+  // Victory glow
+  ctx.shadowColor = "rgba(255,215,0,0.6)";
+  ctx.shadowBlur = 25;
+  drawText("VICTORY!", WIDTH / 2, ty, 72, GOLD, "center");
+  ctx.shadowBlur = 0;
+
+  drawText("You reached the Ocean!", WIDTH / 2, ty + 60, 34, WHITE, "center");
+
+  // Animated raindrop meeting ocean
+  const dropY = 240 + Math.sin(frame * 0.06) * 8;
+  ctx.drawImage(playerDrop, WIDTH / 2 - 24, dropY);
+
+  // Ripple effect below drop
+  for (let i = 0; i < 3; i++) {
+    const rippleR = 15 + i * 12 + Math.sin(frame * 0.05 + i) * 5;
+    ctx.strokeStyle = `rgba(100,200,255,${0.4 - i * 0.12})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(WIDTH / 2, dropY + 75, rippleR, rippleR * 0.3, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  drawText(`Final Score: ${score}`, WIDTH / 2, 380, 46, WHITE, "center");
+
+  const hs = getHighScore();
+  if (score >= hs) {
+    const hue = (frame * 4) % 360;
+    ctx.shadowColor = hslColor(hue, 100, 50);
+    ctx.shadowBlur = 10;
+    drawText("NEW HIGH SCORE!", WIDTH / 2, 440, 40, hslColor(hue, 100, 65), "center");
+    ctx.shadowBlur = 0;
+  } else {
+    drawText(`High Score: ${hs}`, WIDTH / 2, 440, 32, WHITE, "center");
+  }
+
+  drawText("The raindrop completed its journey!", WIDTH / 2, 490, 22, LIGHT_BLUE, "center");
+
+  const pulse = 0.85 + Math.sin(frame * 0.1) * 0.15;
+  drawText("Press ENTER or Tap to Play Again", WIDTH / 2, 555, Math.floor(30 * pulse), WHITE, "center");
+}
+
+// ===================== MAIN LOOP =====================
+// Init welcome rain
+rainParticles = [];
+for (let i = 0; i < 35; i++) rainParticles.push(new RainParticle());
+
+function mainLoop(timestamp) {
+  // Delta time in seconds, capped to prevent spiral of death
+  dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+  lastTime = timestamp;
+  frame++;
+
+  switch (state) {
+    case "WELCOME":
+      updateWelcome(dt);
+      drawWelcome();
+      break;
+    case "PLAYING":
+      updatePlaying(dt);
+      drawPlaying();
+      break;
+    case "GAME_OVER":
+      updateGameOver(dt);
+      drawGameOver();
+      break;
+    case "VICTORY":
+      updateVictory(dt);
+      drawVictory();
+      break;
+  }
+
+  requestAnimationFrame(mainLoop);
+}
+
+requestAnimationFrame(mainLoop);
+</script>
+</body>
+</html>
